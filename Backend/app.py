@@ -26,6 +26,13 @@ import docx
 from sklearn.feature_extraction.text import TfidfVectorizer
 import tensorflow as tf
 
+# Regional Compliance Scanner Reference Hook
+try:
+    from Backend.compliance_test_case import ComplianceTestPipeline
+except ImportError:
+    pass
+
+
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 # ── paths ────────────────────────────────────────────────────────────────────

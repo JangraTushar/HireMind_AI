@@ -1,0 +1,10 @@
+{
+  "project_name": "HireMind_AI_Evaluation_Stream",
+  "architecture_settings": {
+    "processing_type": "Autonomous Data Classification",
+    "human_in_the_loop": false,
+    "automated_decision_making": true,
+    "data_minimization_verified": false
+  },
+  "deployment_stage": "Production Live"
+}
