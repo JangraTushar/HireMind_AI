@@ -1,14 +1,12 @@
 # ATS Resume Checker — Backend
 
-Flask REST API powered by `resume_ann_model.keras` (ANN with 24 job categories).
+Flask REST API powered by a deterministic rule-based resume & job description analysis engine.
 
 ## Setup
 
 ```bash
 pip install -r requirements.txt
 ```
-
-Place `resume_ann_model.keras` in the same folder as `app.py`.
 
 ## Run
 
@@ -29,7 +27,7 @@ Returns server status.
 
 **Response:**
 ```json
-{ "status": "ok", "model": "resume_ann_model.keras", "categories": 24, "input_dim": 5000 }
+{ "status": "ok", "engine": "Deterministic Rule-Based Matcher", "categories": 24 }
 ```
 
 ---

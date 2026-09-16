@@ -1,30 +1,13 @@
 """
 ATS Resume Checker - Flask Backend
-Model: resume_ann_model.keras  (TF-IDF 5000 → ANN → 24 job categories)
-
-FIX LOG
--------
-1. Model lazy-loaded with clear startup error instead of crashing at import time.
-2. /predict routes guarded — return 503 if model is unavailable.
-3. TF-IDF vectorizer now uses a deterministic, reproducible corpus so vocabulary
-   is stable across requests (previously rebuilt from scratch every call, which
-   could scramble feature order).
-4. Flask now serves index.html at "/" so the frontend loads without a separate
-   web server.
-5. All emoji in suggestion strings replaced with ASCII prefixes so terminals /
-   JSON clients that can't render UTF-8 don't break.
-6. /api/analyze returns CORS headers on error responses too (via flask-cors).
-7. Input validation tightened: empty filename, wrong extension handled gracefully.
+Engine: Deterministic Rule-Based Resume & Job Description Analysis Engine
 """
 
 import os, re, io, logging
-import numpy as np
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import PyPDF2
 import docx
-from sklearn.feature_extraction.text import TfidfVectorizer
-import tensorflow as tf
 
 # Regional Compliance Scanner Reference Hook
 try:
@@ -33,12 +16,8 @@ except ImportError:
     pass
 
 
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-
 # ── paths ────────────────────────────────────────────────────────────────────
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "resume_ann_model.keras")
-INPUT_DIM  = 5000
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ── categories ───────────────────────────────────────────────────────────────
 JOB_CATEGORIES = [
@@ -187,52 +166,6 @@ CORS(app)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ── FIX 1: lazy model loading ─────────────────────────────────────────────────
-_model = None
-
-def get_model():
-    """Load model on first use; return None and log if file is missing."""
-    global _model
-    if _model is not None:
-        return _model
-    if not os.path.exists(MODEL_PATH):
-        logger.error(
-            "Model file not found: %s\n"
-            "  Place resume_ann_model.keras in the same directory as app.py.\n"
-            "  The /health and category endpoints still work without it.",
-            MODEL_PATH,
-        )
-        return None
-    try:
-        logger.info("Loading Keras model from %s …", MODEL_PATH)
-        _model = tf.keras.models.load_model(MODEL_PATH)
-        logger.info("Model loaded OK (input_dim=%d, output_dim=%d)", INPUT_DIM, len(JOB_CATEGORIES))
-    except Exception as exc:
-        logger.error("Failed to load model: %s", exc)
-        _model = None
-    return _model
-
-# ── FIX 2: stable TF-IDF corpus ───────────────────────────────────────────────
-# Build the background corpus ONCE so the vocabulary is identical every call.
-_DOMAIN_CORPUS = " ".join(
-    tok for kws in DOMAIN_KEYWORDS.values() for tok in kws
-)
-_FILLER = " ".join(f"token{i}" for i in range(5000))
-_BG_CORPUS = [_DOMAIN_CORPUS, _FILLER]   # first slot reserved for the user text
-
-def text_to_tfidf_5000(text: str) -> np.ndarray:
-    """Convert text to a fixed 5000-dim TF-IDF vector."""
-    corpus = [text] + _BG_CORPUS          # user text always at index 0
-    vec    = TfidfVectorizer(max_features=INPUT_DIM, stop_words="english")
-    matrix = vec.fit_transform(corpus)    # shape: (3, ≤5000)
-    user_vec = matrix[0].toarray()        # shape: (1, actual_features)
-
-    n_features = user_vec.shape[1]
-    if n_features < INPUT_DIM:
-        user_vec = np.hstack([user_vec, np.zeros((1, INPUT_DIM - n_features))])
-
-    return user_vec.astype(np.float32)    # shape: (1, 5000)
-
 # ── text extraction ───────────────────────────────────────────────────────────
 def extract_text_from_pdf(b: bytes) -> str:
     reader = PyPDF2.PdfReader(io.BytesIO(b))
@@ -251,18 +184,28 @@ def extract_text(b: bytes, filename: str) -> str:
     if ext == "txt":              return b.decode("utf-8", errors="ignore")
     raise ValueError(f"Unsupported file type: .{ext}  (Accepted: pdf, docx, txt)")
 
-# ── prediction ────────────────────────────────────────────────────────────────
+# ── deterministic rule-based prediction ───────────────────────────────────────
 def predict_category(text: str):
-    model = get_model()
-    if model is None:
-        raise RuntimeError(
-            "Model not loaded. Ensure resume_ann_model.keras is present next to app.py."
-        )
-    features = text_to_tfidf_5000(text.lower())
-    probs    = model.predict(features, verbose=0)[0]
-    idx      = int(np.argmax(probs))
-    scores   = {JOB_CATEGORIES[i]: float(probs[i]) for i in range(len(JOB_CATEGORIES))}
-    return JOB_CATEGORIES[idx], float(probs[idx]), scores
+    """Predict job category deterministically using frequency keyword matching."""
+    rl = text.lower()
+    raw_scores = {}
+    for cat in JOB_CATEGORIES:
+        kws = DOMAIN_KEYWORDS.get(cat, [])
+        if not kws:
+            raw_scores[cat] = 0.0
+            continue
+        matches = sum(1 for kw in kws if re.search(r"\b" + re.escape(kw) + r"\b", rl))
+        raw_scores[cat] = matches / len(kws)
+
+    total = sum(raw_scores.values())
+    if total > 0:
+        norm_scores = {cat: raw_scores[cat] / total for cat in JOB_CATEGORIES}
+    else:
+        norm_scores = {cat: 1.0 / len(JOB_CATEGORIES) for cat in JOB_CATEGORIES}
+
+    top_cat = max(norm_scores.items(), key=lambda x: x[1])[0]
+    confidence = norm_scores[top_cat]
+    return top_cat, float(confidence), norm_scores
 
 # ── ATS scoring ───────────────────────────────────────────────────────────────
 def compute_ats_score(resume_text: str, job_description: str) -> dict:
@@ -333,7 +276,6 @@ def get_domain_missing(category: str, resume_text: str) -> list:
     rl  = resume_text.lower()
     return [kw for kw in kws if kw not in rl]
 
-# ── FIX 3: ASCII-safe suggestion strings ──────────────────────────────────────
 def generate_suggestions(analysis: dict, category: str, domain_missing: list) -> list:
     s = analysis["ats_score"]; tips = []
     if   s < 40: tips.append("[!] Critical score — resume needs a major overhaul before applying.")
@@ -367,7 +309,7 @@ def generate_suggestions(analysis: dict, category: str, domain_missing: list) ->
     elif wc > 1200: tips.append(f"[len] Resume too long ({wc} words). Trim to 1-2 pages.")
     return tips
 
-# ── FIX 4: serve the frontend ─────────────────────────────────────────────────
+# ── serve the frontend ────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return send_from_directory(BASE_DIR, "index.html")
@@ -375,13 +317,10 @@ def index():
 # ── routes ────────────────────────────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
-    model_ok = get_model() is not None
     return jsonify({
-        "status":     "ok" if model_ok else "degraded",
-        "model":      "resume_ann_model.keras",
-        "model_loaded": model_ok,
+        "status":     "ok",
+        "engine":     "Deterministic Rule-Based Matcher",
         "categories": len(JOB_CATEGORIES),
-        "input_dim":  INPUT_DIM,
     }), 200
 
 @app.route("/api/analyze", methods=["POST"])
@@ -417,11 +356,7 @@ def analyze():
             return jsonify({"error": "Job description missing or too short. "
                                      "Send as 'job_description' (text) or 'jd_file' (file)."}), 400
 
-        # ── FIX 2: guard on model availability ───────────────────────────────
-        try:
-            category, confidence, all_scores = predict_category(resume_text)
-        except RuntimeError as model_err:
-            return jsonify({"error": str(model_err)}), 503
+        category, confidence, all_scores = predict_category(resume_text)
 
         top3           = sorted(all_scores.items(), key=lambda x: x[1], reverse=True)[:3]
         analysis       = compute_ats_score(resume_text, job_description)
@@ -475,10 +410,7 @@ def predict_only():
             return jsonify({"error": "No resume file."}), 400
         f    = request.files["resume"]
         text = extract_text(f.read(), f.filename)
-        try:
-            category, confidence, scores = predict_category(text)
-        except RuntimeError as model_err:
-            return jsonify({"error": str(model_err)}), 503
+        category, confidence, scores = predict_category(text)
         top5 = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:5]
         return jsonify({
             "category":   category,
@@ -491,3 +423,4 @@ def predict_only():
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
+

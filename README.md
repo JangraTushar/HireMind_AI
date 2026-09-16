@@ -1,7 +1,7 @@
-# HireMind-AI (AI-Powered-Recruitment-Intelligence-System)
+# HireMind (ATS Resume Checker Platform)
 
 ## Introduction 
-It's a AI powered Resume checker platform. Where user can use it for one resumec, or upload many files for check them all to gather.
+HireMind is an automated, rule-based Resume & ATS checker platform. Users can upload single or batch resume files and job descriptions to analyze keyword matching, formatting quality, section completeness, and job domain classification.
 
 ## Structure 
 
@@ -9,8 +9,4 @@ It's a AI powered Resume checker platform. Where user can use it for one resumec
  |- preprocessed data
  |- data set
 
-## ⚠️ Architectural Evaluation Parameters (Test Payload)
-* **Operational Control Level:** Fully Automated / Autonomous Execution Mode.
-* **Human Oversight Integration:** None. Decisions are processed natively by the underlying backend loops without manual checkpoint validation.
-* **Governance Classification:** High-Risk Processing Pipeline.
 
